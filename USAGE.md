@@ -119,7 +119,7 @@ Login: alice
 Email: alice@example.com
 Password (або 'g' щоб згенерувати): ●●●●●●●●
 Створено:
-  [1] login='alice' email='alice@example.com' password='p@ssw0rd!' created_at=2026-04-26 18:30:00
+  id=1 login='alice' email='alice@example.com' password='p@ssw0rd!' created_at=2026-04-26 18:30:00
 ```
 
 Правила:
@@ -135,7 +135,7 @@ Password (або 'g' щоб згенерувати): ●●●●●●●●
 
 ```
 Login для пошуку: alice
-  [1] login='alice' email='alice@example.com' password='p@ssw0rd!' created_at=...
+  id=1 login='alice' email='alice@example.com' password='p@ssw0rd!' created_at=...
 ```
 
 Якщо немає — `Не знайдено.`
@@ -147,9 +147,13 @@ Login для пошуку: alice
 Виводить **усі** записи з **розшифрованими** паролями:
 
 ```
-  [1] login='alice' email='alice@example.com' password='p1' created_at=...
-  [2] login='bob'   email='bob@corp.io'      password='p2' created_at=...
+  [1] id=1 login='alice' email='alice@example.com' password='p1' created_at=...
+  [2] id=2 login='bob'   email='bob@corp.io'      password='p2' created_at=...
 ```
+
+**Формат рядка**:
+- `[N]` — порядковий номер у списку (завжди починається з `1`, без пропусків).
+- `id=N` — стабільний DB id запису. Ніколи не перевикористовується після видалення (це SQLite `AUTOINCREMENT`-семантика). Тому якщо ти створив запис, видалив, створив знов — `[1] id=2` (рядок перший, але DB id вже 2).
 
 Якщо БД порожня — `(порожньо)`.
 
@@ -247,7 +251,7 @@ master password ще не задано. Створіть.
 
 ```
 Пошуковий запит: corp
-  [3] login='bob' email='bob@corp.io' password='pb' created_at=...
+  [1] id=3 login='bob' email='bob@corp.io' password='pb' created_at=...
 ```
 
 Знаходить будь-який запис, де `corp` зустрічається у `login` **або** `email`.
@@ -320,7 +324,7 @@ Password (або 'g' щоб згенерувати): g
 Символи (!@#…)? [Y/n]: 
 Згенеровано: K[]b9.r…
 Створено:
-  [1] login='github' email='me@example.com' password='K[]b9.r…' created_at=…
+  id=1 login='github' email='me@example.com' password='K[]b9.r…' created_at=…
 ```
 
 Типові помилки:
@@ -349,18 +353,18 @@ Login: github
 Email: me@example.com
 Password: ●●●●●●●●●●●
 Створено:
-  [1] login='github' email='me@example.com' password='ghp_abc123' created_at=...
+  id=1 login='github' email='me@example.com' password='ghp_abc123' created_at=...
 
 Виберіть пункт: 1
 Login: aws
 Email: me@example.com
 Password: ●●●●●●●●●●●
 Створено:
-  [2] login='aws' email='me@example.com' password='AKIA...' created_at=...
+  id=2 login='aws' email='me@example.com' password='AKIA...' created_at=...
 
 Виберіть пункт: 8
 Пошуковий запит: hub
-  [1] login='github' email='me@example.com' password='ghp_abc123' ...
+  [1] id=1 login='github' email='me@example.com' password='ghp_abc123' ...
 
 Виберіть пункт: 5
 Login: github
@@ -618,7 +622,7 @@ Login: alice
 Email: alice@x.com
 Password (або 'g' щоб згенерувати): p@ssw0rd!
 Створено:
-  [1] login='alice' email='alice@x.com' password='p@ssw0rd!' ...
+  id=1 login='alice' email='alice@x.com' password='p@ssw0rd!' ...
 
 === Password Manager ===
 ...
@@ -628,7 +632,7 @@ Password (або 'g' щоб згенерувати): p@ssw0rd!
 
 Сесію заблоковано через бездіяльність (>300 с). Введіть master password.
 Master password: ******
-  [1] login='alice' email='alice@x.com' password='p@ssw0rd!' ...
+  [1] id=1 login='alice' email='alice@x.com' password='p@ssw0rd!' ...
 ```
 
 ### Обмеження
