@@ -5,6 +5,13 @@ from __future__ import annotations
 import getpass
 import sys
 
+from .generator import (
+    DEFAULT_LENGTH,
+    MAX_LENGTH,
+    MIN_LENGTH,
+    PasswordPolicy,
+    generate_password,
+)
 from .manager import DEFAULT_DB_PATH, PasswordManager, UserRecord
 
 
@@ -20,6 +27,7 @@ MENU = """
 8)  Пошук по login/email
 9)  Вихід
 10) Змінити master password
+11) Згенерувати пароль
 """
 
 
@@ -82,13 +90,82 @@ def _login(manager: PasswordManager, *, max_attempts: int = 5) -> bool:
     return False
 
 
+def _prompt_yesno(text: str, *, default: bool) -> bool:
+    suffix = " [Y/n]: " if default else " [y/N]: "
+    raw = _prompt(text + suffix).lower()
+    if not raw:
+        return default
+    return raw in ("y", "yes", "т", "так")
+
+
+def _interactive_generate() -> str | None:
+    """Ask the policy interactively, generate, and return the password.
+
+    Returns ``None`` if the user typed an invalid value or the policy is
+    impossible. Defaults: length 20, all four classes enabled.
+    """
+    raw_len = _prompt(f"Довжина [{DEFAULT_LENGTH}]: ") or str(DEFAULT_LENGTH)
+    try:
+        length = int(raw_len)
+    except ValueError:
+        print(f"Невірна довжина: {raw_len!r}.")
+        return None
+
+    policy = PasswordPolicy(
+        length=length,
+        use_lower=_prompt_yesno("Нижній регістр (a-z)?", default=True),
+        use_upper=_prompt_yesno("Верхній регістр (A-Z)?", default=True),
+        use_digits=_prompt_yesno("Цифри (0-9)?", default=True),
+        use_symbols=_prompt_yesno("Символи (!@#…)?", default=True),
+    )
+    try:
+        password = generate_password(policy)
+    except ValueError as exc:
+        print(f"Помилка генератора: {exc}")
+        print(
+            f"Підказка: довжина від {MIN_LENGTH} до {MAX_LENGTH}, хоча б один клас включений."
+        )
+        return None
+    print(f"Згенеровано: {password}")
+    return password
+
+
+def _prompt_password_or_generate(prompt_text: str) -> str:
+    """Read a password OR (if user types ``g``) generate one interactively.
+
+    Re-prompts on empty input. Returning the literal string ``"g"`` from
+    the user is impossible — it is treated as a "generate" command.
+    """
+    while True:
+        raw = _prompt_password(prompt_text)
+        if raw == "g":
+            generated = _interactive_generate()
+            if generated is not None:
+                return generated
+            continue
+        if not raw:
+            print(
+                "Password не може бути порожнім "
+                "(або введіть 'g' — згенерувати)."
+            )
+            continue
+        return raw
+
+
+def _generate_password(_manager: PasswordManager) -> None:
+    """Standalone generator menu item: print a password to the screen."""
+    _interactive_generate()
+
+
 def _add_account(manager: PasswordManager) -> None:
     login = _prompt("Login: ")
     if not login:
         print("Login обов'язковий.")
         return
     email = _prompt("Email: ")
-    password = _prompt_password("Password: ")
+    password = _prompt_password_or_generate(
+        "Password (або 'g' щоб згенерувати): "
+    )
     try:
         record = manager.create_user(login, email, password)
     except ValueError as exc:
@@ -124,7 +201,9 @@ def _update_password(manager: PasswordManager) -> None:
     if manager.get_user(login) is None:
         print("Не знайдено.")
         return
-    new_password = _prompt_password("Новий password: ")
+    new_password = _prompt_password_or_generate(
+        "Новий password (або 'g' щоб згенерувати): "
+    )
     if manager.update_password(login, new_password):
         print("Оновлено.")
     else:
@@ -194,6 +273,7 @@ ACTIONS = {
     "7": _import_json,
     "8": _search,
     "10": _change_master,
+    "11": _generate_password,
 }
 
 
