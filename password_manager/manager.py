@@ -189,7 +189,14 @@ class PasswordManager:
         return [self._row_to_record(row, fernet) for row in rows]
 
     def delete_user(self, login: str) -> bool:
-        """Delete the account by login. Returns True iff a row was removed."""
+        """Delete the account by login. Returns True iff a row was removed.
+
+        Requires the manager to be unlocked. Although deleting a row does not
+        need the encryption key, this matches the contract of every other
+        CRUD method (and prevents a destructive op from succeeding while the
+        manager is locked, e.g. after auto-lock or an explicit ``lock()``).
+        """
+        self._require_unlocked()
         with db.connect(self.db_path) as conn:
             cur = conn.execute("DELETE FROM users WHERE login = ?", (login,))
             return cur.rowcount > 0
