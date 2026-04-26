@@ -14,6 +14,7 @@ master password у БД не зберігається.
 - CLI меню: додати / знайти / показати всі / видалити / оновити / пошук.
 - Експорт та імпорт JSON (розшифровані дані).
 - Зміна master password з атомарним перешифруванням усіх записів.
+- Генератор сильних паролів (`secrets.SystemRandom`) з налаштуванням довжини та класів символів.
 - Уникнення дублікатів login (UNIQUE), коректна обробка помилок.
 
 ## Встановлення
@@ -48,8 +49,10 @@ python main.py
 │   ├── crypto.py                # PBKDF2 + Fernet хелпери
 │   ├── db.py                    # SQLite схема й helpers
 │   ├── manager.py               # API: PasswordManager
+│   ├── generator.py             # генератор сильних паролів
 │   └── cli.py                   # CLI меню
 ├── tests/test_password_manager.py
+├── tests/test_generator.py
 └── requirements.txt
 ```
 
@@ -75,6 +78,11 @@ mgr.import_from_json("export.json")
 
 # Зміна master password — атомарно перешифровує всі записи
 mgr.change_master_password("super-secret", "new-master-2025")
+
+# Генератор паролів
+from password_manager import PasswordPolicy, generate_password
+strong = generate_password()                                  # 20 символів, всі класи
+only_alnum = generate_password(PasswordPolicy(length=32, use_symbols=False))
 ```
 
 ## Тести
