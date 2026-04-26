@@ -132,7 +132,11 @@ def _update_password(manager: PasswordManager) -> None:
 
 def _export_json(manager: PasswordManager) -> None:
     path = _prompt("Шлях до файлу експорту [export.json]: ") or "export.json"
-    count = manager.export_to_json(path)
+    try:
+        count = manager.export_to_json(path)
+    except OSError as exc:
+        print(f"Помилка експорту: {exc}")
+        return
     print(f"Експортовано {count} акаунтів у {path}.")
 
 

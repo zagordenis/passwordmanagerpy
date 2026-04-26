@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from dataclasses import dataclass
 from typing import Iterable
@@ -173,10 +174,17 @@ class PasswordManager:
     # ---------- import / export ----------
 
     def export_to_json(self, path: str) -> int:
-        """Write all accounts (decrypted) to `path`. Returns count exported."""
+        """Write all accounts (decrypted) to `path`. Returns count exported.
+
+        `path` may contain `~` or `$VAR`; missing parent directories are created.
+        """
+        resolved = _resolve_path(path)
+        parent = os.path.dirname(resolved)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
         records = self.list_users()
         payload = [r.to_dict() for r in records]
-        with open(path, "w", encoding="utf-8") as fh:
+        with open(resolved, "w", encoding="utf-8") as fh:
             json.dump(payload, fh, ensure_ascii=False, indent=2)
         return len(records)
 
@@ -184,8 +192,10 @@ class PasswordManager:
         """Load accounts from a JSON file produced by `export_to_json`.
 
         Returns the number of newly inserted rows. Duplicates are skipped by default.
+        `path` may contain `~` or `$VAR`.
         """
-        with open(path, "r", encoding="utf-8") as fh:
+        resolved = _resolve_path(path)
+        with open(resolved, "r", encoding="utf-8") as fh:
             payload = json.load(fh)
         if not isinstance(payload, list):
             raise ValueError("import file must contain a JSON array of objects")
@@ -234,3 +244,10 @@ def iter_records(records: Iterable[UserRecord]) -> Iterable[dict]:
     """Helper used by the CLI to render record lists."""
     for r in records:
         yield r.to_dict()
+
+
+def _resolve_path(path: str) -> str:
+    """Expand `~` and environment variables; return an absolute path."""
+    if not path:
+        raise ValueError("path must not be empty")
+    return os.path.abspath(os.path.expanduser(os.path.expandvars(path)))

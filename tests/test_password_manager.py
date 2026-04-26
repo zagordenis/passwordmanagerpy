@@ -86,6 +86,30 @@ class PasswordManagerTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             fresh.create_user("x", "y", "z")
 
+    def test_export_path_expanduser(self) -> None:
+        """Path starting with `~` must be expanded against $HOME, not taken literally."""
+        self.manager.create_user("alice", "alice@example.com", "p1")
+        original_home = os.environ.get("HOME")
+        try:
+            os.environ["HOME"] = self.tmp.name
+            count = self.manager.export_to_json("~/export.json")
+        finally:
+            if original_home is None:
+                os.environ.pop("HOME", None)
+            else:
+                os.environ["HOME"] = original_home
+        self.assertEqual(count, 1)
+        # Literal "~/export.json" must NOT exist; the expanded path must.
+        self.assertFalse(os.path.exists(os.path.join(self.tmp.name, "~", "export.json")))
+        self.assertTrue(os.path.exists(os.path.join(self.tmp.name, "export.json")))
+
+    def test_export_creates_missing_parent_dir(self) -> None:
+        self.manager.create_user("alice", "alice@example.com", "p1")
+        target = os.path.join(self.tmp.name, "nested", "deeper", "export.json")
+        count = self.manager.export_to_json(target)
+        self.assertEqual(count, 1)
+        self.assertTrue(os.path.exists(target))
+
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
