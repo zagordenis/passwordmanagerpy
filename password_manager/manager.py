@@ -16,6 +16,7 @@ DEFAULT_DB_PATH = "users.db"
 
 META_SALT = "salt"
 META_VERIFIER = "verifier"
+META_KDF = "kdf_version"
 
 
 @dataclass
@@ -57,36 +58,68 @@ class PasswordManager:
             )
 
     def set_master_password(self, master_password: str) -> None:
-        """Initialise master password. Refuses if one is already set."""
+        """Initialise master password. Refuses if one is already set.
+
+        New databases always use Argon2id (the only KDF written by this
+        method). PBKDF2 paths exist solely to read databases produced by
+        previous releases; those are migrated by ``change_master_password``.
+        """
         if self.has_master_password():
             raise RuntimeError("master password already set")
         if not master_password:
             raise ValueError("master password must not be empty")
 
         salt = crypto.generate_salt()
-        key = crypto.derive_key(master_password, salt)
+        key = crypto.derive_key(
+            master_password, salt, kdf_version=crypto.KDF_ARGON2ID_V1,
+        )
         fernet = Fernet(key)
         verifier = crypto.make_verifier(fernet)
 
         with db.connect(self.db_path) as conn:
             db.set_meta(conn, META_SALT, salt)
             db.set_meta(conn, META_VERIFIER, verifier)
+            db.set_meta(conn, META_KDF, crypto.KDF_ARGON2ID_V1.encode("utf-8"))
         self._fernet = fernet
+
+    def _read_kdf_version(self, conn) -> str:
+        """Return the KDF identifier stored for this DB.
+
+        Old databases (pre-Argon2 release) have no ``kdf_version`` row at
+        all — those are PBKDF2-legacy by definition.
+        """
+        raw = db.get_meta(conn, META_KDF)
+        if raw is None:
+            return crypto.KDF_PBKDF2_LEGACY
+        return raw.decode("utf-8")
 
     def verify_master_password(self, master_password: str) -> bool:
         """Return True iff `master_password` matches; on success, unlocks the manager."""
         with db.connect(self.db_path) as conn:
             salt = db.get_meta(conn, META_SALT)
             verifier = db.get_meta(conn, META_VERIFIER)
+            kdf_version = self._read_kdf_version(conn)
         if salt is None or verifier is None:
             return False
 
-        key = crypto.derive_key(master_password, salt)
+        try:
+            key = crypto.derive_key(master_password, salt, kdf_version=kdf_version)
+        except ValueError:
+            return False
         fernet = Fernet(key)
         if crypto.check_verifier(fernet, verifier):
             self._fernet = fernet
             return True
         return False
+
+    def is_legacy_kdf(self) -> bool:
+        """True iff this DB still uses the PBKDF2 KDF.
+
+        The CLI uses this to nudge the user to change their master password
+        (which migrates the DB to Argon2id automatically).
+        """
+        with db.connect(self.db_path) as conn:
+            return self._read_kdf_version(conn) == crypto.KDF_PBKDF2_LEGACY
 
     def change_master_password(
         self, old_master_password: str, new_master_password: str
@@ -111,7 +144,11 @@ class PasswordManager:
         assert old_fernet is not None
 
         new_salt = crypto.generate_salt()
-        new_key = crypto.derive_key(new_master_password, new_salt)
+        # Always migrate to Argon2id on master change — this is the path
+        # that takes legacy PBKDF2 databases off the legacy KDF.
+        new_key = crypto.derive_key(
+            new_master_password, new_salt, kdf_version=crypto.KDF_ARGON2ID_V1,
+        )
         new_fernet = Fernet(new_key)
         new_verifier = crypto.make_verifier(new_fernet)
 
@@ -132,6 +169,7 @@ class PasswordManager:
                 count += 1
             db.set_meta(conn, META_SALT, new_salt)
             db.set_meta(conn, META_VERIFIER, new_verifier)
+            db.set_meta(conn, META_KDF, crypto.KDF_ARGON2ID_V1.encode("utf-8"))
         self._fernet = new_fernet
         return count
 

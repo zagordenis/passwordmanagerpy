@@ -2,14 +2,15 @@
 
 Невеликий менеджер паролів на Python 3 + SQLite + `cryptography` (Fernet).
 Зберігає логін, email і пароль для багатьох акаунтів. Усі паролі шифруються
-ключем, що деривується з master password через PBKDF2-HMAC-SHA256 + salt.
+ключем, що деривується з master password через **Argon2id** + salt.
 Master password підтверджується розшифруванням контрольного токена — сам
 master password у БД не зберігається.
 
 ## Можливості
 
-- Master password з PBKDF2 (480 000 ітерацій, унікальний salt).
+- Master password з **Argon2id** (m=19 MiB, t=2, p=1 — OWASP 2024), унікальний 16-байтний salt.
 - Fernet (AES-128-CBC + HMAC-SHA256) для шифрування паролів.
+- Backward-compat: БД, створені попередніми версіями (PBKDF2-HMAC-SHA256, 480k ітерацій), відкриваються коректно. Зміна master password (пункт 10) автоматично мігрує KDF на Argon2id.
 - SQLite (`users.db`) — без сторонніх ORM, лише `sqlite3`.
 - CLI меню: додати / знайти / показати всі / видалити / оновити / пошук.
 - Експорт та імпорт JSON (розшифровані дані).
@@ -47,7 +48,7 @@ python main.py
 ├── main.py                      # точка входу
 ├── password_manager/
 │   ├── __init__.py
-│   ├── crypto.py                # PBKDF2 + Fernet хелпери
+│   ├── crypto.py                # Argon2id (+ legacy PBKDF2) + Fernet хелпери
 │   ├── db.py                    # SQLite схема й helpers
 │   ├── manager.py               # API: PasswordManager
 │   ├── generator.py             # генератор сильних паролів
@@ -94,9 +95,15 @@ python -m unittest discover -s tests -v
 
 ## Безпека
 
-- Master password не зберігається — у БД лежать тільки `salt` і
-  зашифрований верифікаційний токен. Невірний master password не
-  розшифровує токен → доступ заборонено.
+- Master password не зберігається — у БД лежать тільки `salt`,
+  зашифрований верифікаційний токен і ідентифікатор KDF. Невірний
+  master password не розшифровує токен → доступ заборонено.
+- KDF: **Argon2id** (memory-hard, стійкий до GPU/ASIC brute-force атак).
+  Параметри: `memory_cost=19 MiB`, `time_cost=2`, `parallelism=1`
+  (OWASP-рекомендація 2024). Реалізація — `argon2-cffi`.
+- Старі БД з PBKDF2-HMAC-SHA256 (480 000 ітерацій) досі читаються;
+  при наступній зміні master password переходять на Argon2id
+  автоматично. CLI попереджає про це після login.
 - Якщо забути master password — відновити паролі неможливо.
 - БД файл (`users.db`) і будь-які експорти JSON додані в `.gitignore`,
   щоб випадково не закомітити.
