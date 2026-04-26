@@ -76,6 +76,11 @@ class EnsureUnlockedTests(unittest.TestCase):
         self.db_path = os.path.join(self.tmp.name, "users.db")
         self.manager = PasswordManager(self.db_path)
         self.manager.set_master_password("master-1")
+        # Capture stdout so the lock-prompt message printed by
+        # ``_ensure_unlocked`` does not leak into the test runner output.
+        self._stdout_patch = patch("sys.stdout", new=io.StringIO())
+        self._stdout_patch.start()
+        self.addCleanup(self._stdout_patch.stop)
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
