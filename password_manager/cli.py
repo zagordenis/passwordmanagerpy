@@ -85,9 +85,18 @@ def _prompt_password(text: str) -> str:
             raise _UserAbort from None
 
 
-def _print_record(record: UserRecord) -> None:
+def _print_record(record: UserRecord, index: int | None = None) -> None:
+    """Pretty-print one record.
+
+    ``index`` (1-based) is the position in the surrounding listing — it
+    renumbers from 1 every time, so deletions don't leave gaps.
+    ``record.id`` is the stable database id (never reused after delete,
+    by design — it's a primary key).
+    """
+    prefix = f"  [{index}] " if index is not None else "  "
     print(
-        f"  [{record.id}] login={record.login!r} "
+        f"{prefix}id={record.id} "
+        f"login={record.login!r} "
         f"email={record.email!r} "
         f"password={record.password!r} "
         f"created_at={record.created_at}"
@@ -98,8 +107,8 @@ def _print_records(records: list[UserRecord]) -> None:
     if not records:
         print("  (порожньо)")
         return
-    for r in records:
-        _print_record(r)
+    for i, r in enumerate(records, start=1):
+        _print_record(r, index=i)
 
 
 def _setup_master(manager: PasswordManager) -> None:
