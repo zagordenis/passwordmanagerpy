@@ -1,0 +1,27 @@
+# Database & local data
+users.db
+*.db
+*.sqlite
+*.sqlite3
+
+# JSON export dumps
+export.json
+*.export.json
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+env/
+.eggs/
+build/
+dist/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+.DS_Store
