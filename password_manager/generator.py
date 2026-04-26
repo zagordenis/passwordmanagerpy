@@ -80,7 +80,7 @@ def generate_password(policy: PasswordPolicy | None = None) -> str:
         )
 
     classes = p.required_classes()
-    if not classes:
+    if not classes or any(c == "" for c in classes):
         raise ValueError("at least one character class must be enabled")
     if p.length < len(classes):
         # Not enough room to satisfy "one of each class".

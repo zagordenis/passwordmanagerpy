@@ -107,6 +107,21 @@ class GeneratorTests(unittest.TestCase):
         self.assertGreaterEqual(len(counts), 20, "alphabet not well covered")
         self.assertLess(max(counts.values()), 400, "looks heavily biased")
 
+    def test_empty_symbols_with_use_symbols_rejected(self) -> None:
+        """`use_symbols=True` + `symbols=""` must be rejected with a clean
+        ``ValueError`` instead of leaking ``IndexError`` from
+        ``secrets.choice("")``."""
+        policy = PasswordPolicy(
+            length=20,
+            use_lower=False,
+            use_upper=False,
+            use_digits=False,
+            use_symbols=True,
+            symbols="",
+        )
+        with self.assertRaisesRegex(ValueError, "at least one character class"):
+            generate_password(policy)
+
     def test_symbols_customization(self) -> None:
         policy = PasswordPolicy(
             length=12,
