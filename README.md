@@ -13,6 +13,7 @@ master password у БД не зберігається.
 - SQLite (`users.db`) — без сторонніх ORM, лише `sqlite3`.
 - CLI меню: додати / знайти / показати всі / видалити / оновити / пошук.
 - Експорт та імпорт JSON (розшифровані дані).
+- Зміна master password з атомарним перешифруванням усіх записів.
 - Уникнення дублікатів login (UNIQUE), коректна обробка помилок.
 
 ## Встановлення
@@ -71,6 +72,9 @@ mgr.delete_user("alice")
 
 mgr.export_to_json("export.json")
 mgr.import_from_json("export.json")
+
+# Зміна master password — атомарно перешифровує всі записи
+mgr.change_master_password("super-secret", "new-master-2025")
 ```
 
 ## Тести
