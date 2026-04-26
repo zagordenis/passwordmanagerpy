@@ -88,6 +88,53 @@ class PasswordManager:
             return True
         return False
 
+    def change_master_password(
+        self, old_master_password: str, new_master_password: str
+    ) -> int:
+        """Re-encrypt every stored password under a new master in one transaction.
+
+        Verifies `old_master_password` first. Generates a fresh salt + key for
+        the new master, decrypts each row with the old key, encrypts with the
+        new key, and updates `salt` + `verifier` — all inside a single SQLite
+        transaction. Either every row is migrated (and meta updated), or
+        nothing is changed.
+
+        Returns the number of rows re-encrypted. After success, the manager is
+        unlocked under the new master.
+        """
+        if not new_master_password:
+            raise ValueError("new master password must not be empty")
+        if not self.verify_master_password(old_master_password):
+            raise ValueError("old master password is incorrect")
+
+        old_fernet = self._fernet  # set by verify_master_password above
+        assert old_fernet is not None
+
+        new_salt = crypto.generate_salt()
+        new_key = crypto.derive_key(new_master_password, new_salt)
+        new_fernet = Fernet(new_key)
+        new_verifier = crypto.make_verifier(new_fernet)
+
+        # Single transaction: re-encrypt every row, then rotate meta. SQLite's
+        # default isolation rolls back automatically on exception.
+        with db.connect(self.db_path) as conn:
+            rows = conn.execute(
+                "SELECT id, password_encrypted FROM users"
+            ).fetchall()
+            count = 0
+            for row in rows:
+                plaintext = crypto.decrypt_str(old_fernet, row["password_encrypted"])
+                reencrypted = crypto.encrypt_str(new_fernet, plaintext)
+                conn.execute(
+                    "UPDATE users SET password_encrypted = ? WHERE id = ?",
+                    (reencrypted, row["id"]),
+                )
+                count += 1
+            db.set_meta(conn, META_SALT, new_salt)
+            db.set_meta(conn, META_VERIFIER, new_verifier)
+        self._fernet = new_fernet
+        return count
+
     def lock(self) -> None:
         """Forget the derived key (forces re-authentication)."""
         self._fernet = None

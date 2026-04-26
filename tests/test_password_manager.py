@@ -110,6 +110,70 @@ class PasswordManagerTests(unittest.TestCase):
         self.assertEqual(count, 1)
         self.assertTrue(os.path.exists(target))
 
+    def test_change_master_password_reencrypts_all_rows(self) -> None:
+        self.manager.create_user("alice", "alice@example.com", "p1")
+        self.manager.create_user("bob", "bob@example.com", "p2")
+
+        count = self.manager.change_master_password(
+            "correct horse battery staple", "new-master"
+        )
+        self.assertEqual(count, 2)
+
+        # Old master no longer works on a fresh instance.
+        fresh = PasswordManager(self.db_path)
+        self.assertFalse(fresh.verify_master_password("correct horse battery staple"))
+        # New master decrypts everything.
+        self.assertTrue(fresh.verify_master_password("new-master"))
+        self.assertEqual(fresh.get_user("alice").password, "p1")  # type: ignore[union-attr]
+        self.assertEqual(fresh.get_user("bob").password, "p2")  # type: ignore[union-attr]
+
+    def test_change_master_password_wrong_old_rejected(self) -> None:
+        self.manager.create_user("alice", "alice@example.com", "p1")
+        with self.assertRaisesRegex(ValueError, "old master password"):
+            self.manager.change_master_password("wrong-old", "new-master")
+        # Original master must still work after a rejected attempt.
+        fresh = PasswordManager(self.db_path)
+        self.assertTrue(fresh.verify_master_password("correct horse battery staple"))
+        self.assertEqual(fresh.get_user("alice").password, "p1")  # type: ignore[union-attr]
+
+    def test_change_master_password_empty_new_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "new master password"):
+            self.manager.change_master_password(
+                "correct horse battery staple", ""
+            )
+
+    def test_change_master_password_atomic_on_decrypt_failure(self) -> None:
+        """If a row fails to decrypt mid-rotation, NOTHING gets committed."""
+        self.manager.create_user("alice", "alice@example.com", "p1")
+        self.manager.create_user("bob", "bob@example.com", "p2")
+        # Corrupt bob's ciphertext so re-encryption will fail mid-loop.
+        import sqlite3 as _sqlite3
+        with _sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "UPDATE users SET password_encrypted = ? WHERE login = ?",
+                ("not-a-valid-fernet-token", "bob"),
+            )
+            conn.commit()
+        # Re-open manager so the instance state matches the on-disk state.
+        broken = PasswordManager(self.db_path)
+        self.assertTrue(
+            broken.verify_master_password("correct horse battery staple")
+        )
+
+        with self.assertRaises(Exception):
+            broken.change_master_password(
+                "correct horse battery staple", "new-master"
+            )
+
+        # After failure: old master STILL works (no meta rotation),
+        # alice's password STILL decrypts to 'p1' (no half-applied UPDATE).
+        fresh = PasswordManager(self.db_path)
+        self.assertTrue(
+            fresh.verify_master_password("correct horse battery staple"),
+            "old master must still work after rolled-back rotation",
+        )
+        self.assertEqual(fresh.get_user("alice").password, "p1")  # type: ignore[union-attr]
+
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

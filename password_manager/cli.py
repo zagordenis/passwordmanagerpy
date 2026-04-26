@@ -10,15 +10,16 @@ from .manager import DEFAULT_DB_PATH, PasswordManager, UserRecord
 
 MENU = """
 === Password Manager ===
-1) Додати акаунт
-2) Знайти акаунт
-3) Показати всі акаунти
-4) Видалити акаунт
-5) Оновити пароль
-6) Експорт у JSON
-7) Імпорт з JSON
-8) Пошук по login/email
-9) Вихід
+1)  Додати акаунт
+2)  Знайти акаунт
+3)  Показати всі акаунти
+4)  Видалити акаунт
+5)  Оновити пароль
+6)  Експорт у JSON
+7)  Імпорт з JSON
+8)  Пошук по login/email
+9)  Вихід
+10) Змінити master password
 """
 
 
@@ -161,6 +162,28 @@ def _search(manager: PasswordManager) -> None:
     _print_records(manager.search(query))
 
 
+def _change_master(manager: PasswordManager) -> None:
+    old = _prompt_password("Поточний master password: ")
+    while True:
+        new = _prompt_password("Новий master password: ")
+        if not new:
+            print("Новий master password не може бути порожнім.")
+            return
+        confirm = _prompt_password("Підтвердіть новий master password: ")
+        if new != confirm:
+            print("Не співпадає, спробуйте ще раз.")
+            continue
+        break
+    try:
+        count = manager.change_master_password(old, new)
+    except ValueError as exc:
+        print(f"Помилка: {exc}")
+        return
+    print(
+        f"Master password змінено. Перешифровано {count} акаунтів під новим ключем."
+    )
+
+
 ACTIONS = {
     "1": _add_account,
     "2": _find_account,
@@ -170,6 +193,7 @@ ACTIONS = {
     "6": _export_json,
     "7": _import_json,
     "8": _search,
+    "10": _change_master,
 }
 
 
