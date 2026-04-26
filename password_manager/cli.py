@@ -131,6 +131,12 @@ def _login(manager: PasswordManager, *, max_attempts: int = 5) -> bool:
     for attempt in range(1, max_attempts + 1):
         master = _prompt_password("Master password: ")
         if manager.verify_master_password(master):
+            if manager.is_legacy_kdf():
+                print(
+                    "Увага: ця БД використовує старий KDF (PBKDF2). "
+                    "Змініть master password (пункт 10) щоб мігрувати на "
+                    "Argon2id — нічого не доведеться вводити повторно.",
+                )
             return True
         remaining = max_attempts - attempt
         if remaining:
