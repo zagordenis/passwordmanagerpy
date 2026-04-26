@@ -86,6 +86,26 @@ class PasswordManagerTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             fresh.create_user("x", "y", "z")
 
+    def test_delete_user_requires_unlock(self) -> None:
+        """Locked manager must refuse delete_user — destructive ops should
+        not succeed while the manager is locked, even though deletion does
+        not strictly need the encryption key.
+
+        REGRESSION: prior to this guard, an attacker with code-level access
+        to the manager (or a future CLI path that bypassed the auto-lock
+        gate) could destroy rows after auto-lock without re-authenticating.
+        """
+        self.manager.create_user("alice", "a@x.com", "p1")
+        self.manager.lock()
+        with self.assertRaises(RuntimeError) as ctx:
+            self.manager.delete_user("alice")
+        self.assertIn("locked", str(ctx.exception))
+        # And the row must still be there.
+        self.assertTrue(self.manager.verify_master_password(
+            "correct horse battery staple"
+        ))
+        self.assertIsNotNone(self.manager.get_user("alice"))
+
     def test_lock_after_unlock_clears_key(self) -> None:
         """Explicit lock() must drop the derived key so subsequent ops fail."""
         self.manager.create_user("alice", "a@x.com", "p1")
