@@ -59,18 +59,30 @@ def _read_auto_lock_seconds() -> int:
     return value
 
 
+class _UserAbort(Exception):
+    """Raised on EOF (Ctrl+D) to unwind the menu loop into a clean exit."""
+
+
 def _prompt(text: str) -> str:
-    return input(text).strip()
+    try:
+        return input(text).strip()
+    except EOFError:
+        raise _UserAbort from None
 
 
 def _prompt_password(text: str) -> str:
     """Read a password without echoing. Falls back to plain input on non-tty."""
     try:
         return getpass.getpass(text)
-    except (EOFError, KeyboardInterrupt):
+    except EOFError:
+        raise _UserAbort from None
+    except KeyboardInterrupt:
         raise
     except Exception:  # pragma: no cover - environment-specific fallback
-        return input(text)
+        try:
+            return input(text)
+        except EOFError:
+            raise _UserAbort from None
 
 
 def _print_record(record: UserRecord) -> None:
@@ -218,9 +230,21 @@ def _list_accounts(manager: PasswordManager) -> None:
 
 def _delete_account(manager: PasswordManager) -> None:
     login = _prompt("Login для видалення: ")
+    if not login:
+        print("Login обов'язковий.")
+        return
+    # Pre-check the row exists before asking for confirmation, so that
+    # typos give a clean "не знайдено" without a destructive prompt.
+    if manager.get_user(login) is None:
+        print("Не знайдено.")
+        return
+    if not _prompt_yesno(f"Видалити акаунт {login!r}?", default=False):
+        print("Скасовано.")
+        return
     if manager.delete_user(login):
         print("Видалено.")
     else:
+        # Race: row vanished between get_user and delete_user.
         print("Не знайдено.")
 
 
@@ -346,45 +370,55 @@ def run(
         else _read_auto_lock_seconds()
     )
 
-    if not manager.has_master_password():
-        _setup_master(manager)
-    else:
-        if not _login(manager):
-            return 1
-
-    last_activity = clock()
-    while True:
-        print(MENU)
-        choice = _prompt("Виберіть пункт: ")
-        if choice == "9":
-            print("До побачення.")
-            return 0
-        action = ACTIONS.get(choice)
-        if action is None:
-            print("Невірний пункт меню.")
-            continue
-        # Only DB-backed actions go through the auto-lock gate AND reset the
-        # idle timer. NO_AUTH_ACTIONS (e.g. the standalone generator) must
-        # NOT touch `last_activity`, otherwise an idle user could pick item
-        # 11 to silently extend their session past the timeout and then run
-        # a DB-backed action without re-authenticating.
-        if choice not in NO_AUTH_ACTIONS:
-            if not _ensure_unlocked(
-                manager,
-                last_activity=last_activity,
-                timeout=timeout,
-                now=clock(),
-            ):
+    try:
+        if not manager.has_master_password():
+            _setup_master(manager)
+        else:
+            if not _login(manager):
                 return 1
-        try:
-            action(manager)
-        except KeyboardInterrupt:
-            print("\nПерервано.")
-            return 0
-        except Exception as exc:  # noqa: BLE001 - we want CLI to keep running
-            print(f"Несподівана помилка: {exc}", file=sys.stderr)
-        if choice not in NO_AUTH_ACTIONS:
-            last_activity = clock()
+
+        last_activity = clock()
+        while True:
+            print(MENU)
+            choice = _prompt("Виберіть пункт: ")
+            if choice == "9":
+                print("До побачення.")
+                return 0
+            action = ACTIONS.get(choice)
+            if action is None:
+                print("Невірний пункт меню.")
+                continue
+            # Only DB-backed actions go through the auto-lock gate AND reset
+            # the idle timer. NO_AUTH_ACTIONS (e.g. the standalone generator)
+            # must NOT touch `last_activity`, otherwise an idle user could
+            # pick item 11 to silently extend their session past the timeout
+            # and then run a DB-backed action without re-authenticating.
+            if choice not in NO_AUTH_ACTIONS:
+                if not _ensure_unlocked(
+                    manager,
+                    last_activity=last_activity,
+                    timeout=timeout,
+                    now=clock(),
+                ):
+                    return 1
+            try:
+                action(manager)
+            except _UserAbort:
+                # Ctrl+D inside an action — abandon it and go back to menu.
+                print()
+            except KeyboardInterrupt:
+                print("\nПерервано.")
+                return 0
+            except Exception as exc:  # noqa: BLE001 - keep CLI running
+                print(f"Несподівана помилка: {exc}", file=sys.stderr)
+            if choice not in NO_AUTH_ACTIONS:
+                last_activity = clock()
+    except _UserAbort:
+        # Ctrl+D at the top level (menu prompt or initial login) — exit
+        # cleanly with a newline so the next shell prompt isn't glued to
+        # the password prompt.
+        print("\nДо побачення.")
+        return 0
 
 
 if __name__ == "__main__":  # pragma: no cover
