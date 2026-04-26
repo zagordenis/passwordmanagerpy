@@ -86,6 +86,24 @@ class PasswordManagerTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             fresh.create_user("x", "y", "z")
 
+    def test_lock_after_unlock_clears_key(self) -> None:
+        """Explicit lock() must drop the derived key so subsequent ops fail."""
+        self.manager.create_user("alice", "a@x.com", "p1")
+        self.assertTrue(self.manager.is_unlocked)
+        self.manager.lock()
+        self.assertFalse(self.manager.is_unlocked)
+        with self.assertRaises(RuntimeError):
+            self.manager.list_users()
+        with self.assertRaises(RuntimeError):
+            self.manager.create_user("bob", "b@x.com", "p2")
+        # Re-unlock works and old data is intact.
+        self.assertTrue(
+            self.manager.verify_master_password("correct horse battery staple")
+        )
+        record = self.manager.get_user("alice")
+        assert record is not None
+        self.assertEqual(record.password, "p1")
+
     def test_export_path_expanduser(self) -> None:
         """Path starting with `~` must be expanded against $HOME, not taken literally."""
         self.manager.create_user("alice", "alice@example.com", "p1")

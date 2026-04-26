@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import getpass
+import os
 import sys
+import time
+from typing import Callable
 
 from .generator import (
     DEFAULT_LENGTH,
@@ -29,6 +32,31 @@ MENU = """
 10) Змінити master password
 11) Згенерувати пароль
 """
+
+DEFAULT_AUTO_LOCK_SECONDS = 300
+AUTO_LOCK_ENV_VAR = "PM_AUTO_LOCK_SECONDS"
+# Menu items that don't touch the encrypted DB and therefore don't require a
+# fresh master password after an idle period ("9" already exits early before
+# the auto-lock check runs).
+NO_AUTH_ACTIONS = {"11"}
+
+
+def _read_auto_lock_seconds() -> int:
+    """Parse ``PM_AUTO_LOCK_SECONDS`` (default 300, 0 disables auto-lock).
+
+    Invalid / negative values fall back to the default — we do NOT want a typo
+    in the env var to silently disable the security feature.
+    """
+    raw = os.environ.get(AUTO_LOCK_ENV_VAR)
+    if raw is None or raw.strip() == "":
+        return DEFAULT_AUTO_LOCK_SECONDS
+    try:
+        value = int(raw)
+    except ValueError:
+        return DEFAULT_AUTO_LOCK_SECONDS
+    if value < 0:
+        return DEFAULT_AUTO_LOCK_SECONDS
+    return value
 
 
 def _prompt(text: str) -> str:
@@ -241,6 +269,30 @@ def _search(manager: PasswordManager) -> None:
     _print_records(manager.search(query))
 
 
+def _ensure_unlocked(
+    manager: PasswordManager,
+    *,
+    last_activity: float,
+    timeout: int,
+    now: float,
+) -> bool:
+    """If the idle window elapsed, lock the manager and re-prompt master.
+
+    Returns ``True`` if the manager is unlocked after this call, ``False`` if
+    the user failed re-authentication (caller should exit).
+    """
+    if timeout <= 0:
+        return True
+    if now - last_activity <= timeout:
+        return True
+    manager.lock()
+    print(
+        f"\nСесію заблоковано через бездіяльність (>{timeout} с). "
+        "Введіть master password."
+    )
+    return _login(manager)
+
+
 def _change_master(manager: PasswordManager) -> None:
     old = _prompt_password("Поточний master password: ")
     while True:
@@ -277,9 +329,22 @@ ACTIONS = {
 }
 
 
-def run(db_path: str = DEFAULT_DB_PATH) -> int:
-    """Run the interactive menu loop. Returns process exit code."""
+def run(
+    db_path: str = DEFAULT_DB_PATH,
+    *,
+    clock: Callable[[], float] = time.monotonic,
+    auto_lock_seconds: int | None = None,
+) -> int:
+    """Run the interactive menu loop. Returns process exit code.
+
+    ``auto_lock_seconds`` overrides the env var when given (used by tests).
+    ``clock`` is injectable so tests can simulate elapsed time without sleeping.
+    """
     manager = PasswordManager(db_path)
+    timeout = (
+        auto_lock_seconds if auto_lock_seconds is not None
+        else _read_auto_lock_seconds()
+    )
 
     if not manager.has_master_password():
         _setup_master(manager)
@@ -287,6 +352,7 @@ def run(db_path: str = DEFAULT_DB_PATH) -> int:
         if not _login(manager):
             return 1
 
+    last_activity = clock()
     while True:
         print(MENU)
         choice = _prompt("Виберіть пункт: ")
@@ -297,6 +363,19 @@ def run(db_path: str = DEFAULT_DB_PATH) -> int:
         if action is None:
             print("Невірний пункт меню.")
             continue
+        # Only DB-backed actions go through the auto-lock gate AND reset the
+        # idle timer. NO_AUTH_ACTIONS (e.g. the standalone generator) must
+        # NOT touch `last_activity`, otherwise an idle user could pick item
+        # 11 to silently extend their session past the timeout and then run
+        # a DB-backed action without re-authenticating.
+        if choice not in NO_AUTH_ACTIONS:
+            if not _ensure_unlocked(
+                manager,
+                last_activity=last_activity,
+                timeout=timeout,
+                now=clock(),
+            ):
+                return 1
         try:
             action(manager)
         except KeyboardInterrupt:
@@ -304,6 +383,8 @@ def run(db_path: str = DEFAULT_DB_PATH) -> int:
             return 0
         except Exception as exc:  # noqa: BLE001 - we want CLI to keep running
             print(f"Несподівана помилка: {exc}", file=sys.stderr)
+        if choice not in NO_AUTH_ACTIONS:
+            last_activity = clock()
 
 
 if __name__ == "__main__":  # pragma: no cover
