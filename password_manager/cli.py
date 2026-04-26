@@ -363,6 +363,11 @@ def run(
         if action is None:
             print("Невірний пункт меню.")
             continue
+        # Only DB-backed actions go through the auto-lock gate AND reset the
+        # idle timer. NO_AUTH_ACTIONS (e.g. the standalone generator) must
+        # NOT touch `last_activity`, otherwise an idle user could pick item
+        # 11 to silently extend their session past the timeout and then run
+        # a DB-backed action without re-authenticating.
         if choice not in NO_AUTH_ACTIONS:
             if not _ensure_unlocked(
                 manager,
@@ -378,7 +383,8 @@ def run(
             return 0
         except Exception as exc:  # noqa: BLE001 - we want CLI to keep running
             print(f"Несподівана помилка: {exc}", file=sys.stderr)
-        last_activity = clock()
+        if choice not in NO_AUTH_ACTIONS:
+            last_activity = clock()
 
 
 if __name__ == "__main__":  # pragma: no cover
