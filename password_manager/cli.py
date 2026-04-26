@@ -406,9 +406,6 @@ def run(
             except _UserAbort:
                 # Ctrl+D inside an action — abandon it and go back to menu.
                 print()
-            except KeyboardInterrupt:
-                print("\nПерервано.")
-                return 0
             except Exception as exc:  # noqa: BLE001 - keep CLI running
                 print(f"Несподівана помилка: {exc}", file=sys.stderr)
             if choice not in NO_AUTH_ACTIONS:
@@ -418,6 +415,12 @@ def run(
         # cleanly with a newline so the next shell prompt isn't glued to
         # the password prompt.
         print("\nДо побачення.")
+        return 0
+    except KeyboardInterrupt:
+        # Ctrl+C anywhere — including the menu prompt, initial login,
+        # password setup, or inside an action — exits cleanly with code 0
+        # instead of dumping a traceback.
+        print("\nПерервано.")
         return 0
 
 

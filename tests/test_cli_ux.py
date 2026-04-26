@@ -199,5 +199,73 @@ class EofHandlingTests(_RunHarness):
         self.assertIsNotNone(m.get_user("alice"))
 
 
+class KeyboardInterruptHandlingTests(_RunHarness):
+    """Ctrl+C at any prompt must exit cleanly (code 0) with 'Перервано.'
+    instead of dumping a traceback."""
+
+    def _run_with_sigint(self, *, before_sigint, sigint_at, timeout=0):
+        before = list(before_sigint)
+        call_idx = [0]
+        remaining = list(before)
+
+        def fake_input(_prompt=""):
+            i = call_idx[0]
+            call_idx[0] += 1
+            if i == sigint_at:
+                raise KeyboardInterrupt
+            return remaining.pop(0) if remaining else ""
+
+        def fake_getpass(_prompt=""):
+            i = call_idx[0]
+            call_idx[0] += 1
+            if i == sigint_at:
+                raise KeyboardInterrupt
+            return remaining.pop(0) if remaining else ""
+
+        out = io.StringIO()
+        with patch("builtins.input", side_effect=fake_input), \
+             patch("password_manager.cli.getpass.getpass",
+                   side_effect=fake_getpass), \
+             patch("sys.stdout", new=out):
+            code = cli.run(
+                self.db_path,
+                clock=lambda: 0.0,
+                auto_lock_seconds=timeout,
+            )
+        return code, out.getvalue()
+
+    def test_sigint_at_menu_prompt_exits_zero(self) -> None:
+        """Ctrl+C at the menu prompt 'Виберіть пункт:' → exit 0, no traceback."""
+        # Calls: 0) getpass master = "master-1", 1) input menu = SIGINT
+        code, output = self._run_with_sigint(
+            before_sigint=["master-1"], sigint_at=1,
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("Перервано", output)
+
+    def test_sigint_at_initial_master_prompt_exits_zero(self) -> None:
+        """Ctrl+C at the very first password prompt → exit 0, no traceback."""
+        code, output = self._run_with_sigint(
+            before_sigint=[], sigint_at=0,
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("Перервано", output)
+
+    def test_sigint_inside_action_exits_zero(self) -> None:
+        """Ctrl+C while inside an action (e.g. on 'Login для видалення:')
+        also exits cleanly with code 0 — same behaviour as before, but now
+        survives the menu-loop change too."""
+        # Calls: 0) master, 1) menu="4", 2) login prompt = SIGINT
+        code, output = self._run_with_sigint(
+            before_sigint=["master-1", "4"], sigint_at=2,
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("Перервано", output)
+        # alice survived (no destructive action ran)
+        m = PasswordManager(self.db_path)
+        self.assertTrue(m.verify_master_password("master-1"))
+        self.assertIsNotNone(m.get_user("alice"))
+
+
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
