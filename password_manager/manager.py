@@ -8,7 +8,7 @@ import sqlite3
 from dataclasses import dataclass
 from typing import Iterable
 
-from cryptography.fernet import Fernet
+from cryptography.fernet import Fernet, InvalidToken
 
 from . import crypto, db
 
@@ -154,22 +154,33 @@ class PasswordManager:
 
         # Single transaction: re-encrypt every row, then rotate meta. SQLite's
         # default isolation rolls back automatically on exception.
-        with db.connect(self.db_path) as conn:
-            rows = conn.execute(
-                "SELECT id, password_encrypted FROM users"
-            ).fetchall()
-            count = 0
-            for row in rows:
-                plaintext = crypto.decrypt_str(old_fernet, row["password_encrypted"])
-                reencrypted = crypto.encrypt_str(new_fernet, plaintext)
-                conn.execute(
-                    "UPDATE users SET password_encrypted = ? WHERE id = ?",
-                    (reencrypted, row["id"]),
-                )
-                count += 1
-            db.set_meta(conn, META_SALT, new_salt)
-            db.set_meta(conn, META_VERIFIER, new_verifier)
-            db.set_meta(conn, META_KDF, crypto.KDF_ARGON2ID_V1.encode("utf-8"))
+        try:
+            with db.connect(self.db_path) as conn:
+                rows = conn.execute(
+                    "SELECT id, password_encrypted FROM users"
+                ).fetchall()
+                count = 0
+                for row in rows:
+                    plaintext = crypto.decrypt_str(
+                        old_fernet, row["password_encrypted"]
+                    )
+                    reencrypted = crypto.encrypt_str(new_fernet, plaintext)
+                    conn.execute(
+                        "UPDATE users SET password_encrypted = ? WHERE id = ?",
+                        (reencrypted, row["id"]),
+                    )
+                    count += 1
+                db.set_meta(conn, META_SALT, new_salt)
+                db.set_meta(conn, META_VERIFIER, new_verifier)
+                db.set_meta(conn, META_KDF, crypto.KDF_ARGON2ID_V1.encode("utf-8"))
+        except InvalidToken as exc:
+            # A stored row failed to decrypt under the verified old master —
+            # this means the DB was tampered with or corrupted. The transaction
+            # rolls back automatically, leaving the DB on the old master.
+            raise ValueError(
+                "database appears corrupted: a stored password could not be "
+                "decrypted under the current master. Aborted; nothing changed."
+            ) from exc
         self._fernet = new_fernet
         return count
 
@@ -251,17 +262,27 @@ class PasswordManager:
             return cur.rowcount > 0
 
     def search(self, query: str) -> list[UserRecord]:
-        """Case-insensitive substring search over login + email."""
+        """Case-insensitive substring search over login + email.
+
+        Filtering happens in Python (not SQL ``LIKE``) so that case-folding
+        works correctly for non-ASCII text — SQLite's built-in ``LIKE`` and
+        ``LOWER`` only handle ASCII, which silently breaks Cyrillic /
+        Unicode logins. For a personal password store this O(N) scan is fine.
+        """
         fernet = self._require_unlocked()
-        like = f"%{query}%"
+        needle = query.casefold()
         with db.connect(self.db_path) as conn:
             rows = conn.execute(
                 "SELECT id, login, email, password_encrypted, created_at "
-                "FROM users WHERE login LIKE ? OR IFNULL(email,'') LIKE ? "
-                "ORDER BY id",
-                (like, like),
+                "FROM users ORDER BY id"
             ).fetchall()
-        return [self._row_to_record(row, fernet) for row in rows]
+        out: list[UserRecord] = []
+        for row in rows:
+            login = row["login"] or ""
+            email = row["email"] or ""
+            if needle in login.casefold() or needle in email.casefold():
+                out.append(self._row_to_record(row, fernet))
+        return out
 
     # ---------- import / export ----------
 
@@ -269,6 +290,8 @@ class PasswordManager:
         """Write all accounts (decrypted) to `path`. Returns count exported.
 
         `path` may contain `~` or `$VAR`; missing parent directories are created.
+        On POSIX the file is created with mode ``0o600`` (owner read/write only)
+        so that other local users cannot read the plaintext passwords.
         """
         resolved = _resolve_path(path)
         parent = os.path.dirname(resolved)
@@ -276,8 +299,18 @@ class PasswordManager:
             os.makedirs(parent, exist_ok=True)
         records = self.list_users()
         payload = [r.to_dict() for r in records]
-        with open(resolved, "w", encoding="utf-8") as fh:
+        # Open with restrictive perms BEFORE writing, so the plaintext is
+        # never on disk with looser perms even momentarily.
+        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+        fd = os.open(resolved, flags, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
             json.dump(payload, fh, ensure_ascii=False, indent=2)
+        # Re-chmod in case the file already existed with looser perms (``os.open``
+        # with ``O_CREAT`` does not change perms on an existing file).
+        try:
+            os.chmod(resolved, 0o600)
+        except OSError:  # pragma: no cover - non-POSIX or read-only fs
+            pass
         return len(records)
 
     def import_from_json(self, path: str, *, skip_duplicates: bool = True) -> int:
@@ -294,10 +327,17 @@ class PasswordManager:
 
         inserted = 0
         for entry in payload:
+            if not isinstance(entry, dict):
+                # Tolerate junk entries instead of crashing mid-import.
+                continue
             login = entry.get("login")
             email = entry.get("email")
             password = entry.get("password")
-            if not login or password is None:
+            if not isinstance(login, str) or not login:
+                continue
+            if not isinstance(password, str):
+                continue
+            if email is not None and not isinstance(email, str):
                 continue
             try:
                 self.create_user(login, email or "", password)
