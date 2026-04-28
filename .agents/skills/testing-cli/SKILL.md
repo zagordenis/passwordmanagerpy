@@ -10,7 +10,8 @@ web UI, no API, no screenshots needed.
   is set to a tmp dir).
 - Master-prompt text: **`Master password: `** (NOT `Введіть master password:` —
   that string only appears as the auto-lock notice). When the DB is empty,
-  the first prompt is `Новий master password: ` instead.
+  the first prompt is `Новий master password: ` instead, followed by
+  `Підтвердіть master password:`.
 - Menu prompt: `Виберіть пункт: `
 - Exit message: `До побачення.` (printed on `9`, on Ctrl+D at the menu, and on
   KeyboardInterrupt as `Перервано.`).
@@ -62,6 +63,25 @@ child.expect_exact("Виберіть пункт:")
 Items `9` and `11` (and the auto-lock prompt) are in `NO_AUTH_ACTIONS` —
 they neither trigger re-auth nor reset the inactivity timer.
 
+## Exact prompt strings (gotchas)
+
+Some prompts include extra text and trip up naive `expect_exact`:
+
+- `1) Додати акаунт` password prompt is `Password (або 'g' щоб згенерувати): `
+  — NOT bare `Password:`. Match on `"щоб згенерувати):"` or use the full
+  string. Same applies to `5) Оновити пароль`.
+- `10) Змінити master password` asks three prompts in order:
+  `Поточний master password:`, `Новий master password:`,
+  `Підтвердіть новий master password:`. On success it prints
+  `Master password змінено. Перешифровано N акаунтів під новим ключем.`
+  (use `expect("Перешифровано \\d+ акаунтів")` for the count line).
+- Wrong master at login → `Невірний пароль. Залишилось спроб: N.`
+  (the period after N is part of the line).
+- Legacy KDF warning (PR #13) appears AFTER successful login on PBKDF2 DBs:
+  `Увага: ця БД використовує старий KDF (PBKDF2). ...`. Match on the
+  substring `використовує старий KDF` — not the exact line, since the full
+  warning wraps across two `print()` calls in some terminals.
+
 ## Adversarial assertions
 
 For any UX fix, ask: "would the test still pass if the fix were reverted?"
@@ -77,6 +97,29 @@ If yes, redesign. Concrete patterns that work here:
   all three.
 - For DB-state changes: open a fresh `PasswordManager` after the CLI exits
   and call `verify_master_password` + `get_user` to confirm side effects.
+
+## Crypto / KDF / migration testing pattern
+
+For changes that touch the `meta` table (master password, KDF version,
+salts), the strongest assertion is direct SQLite inspection between CLI
+runs — stronger than CLI output, because the schema state is the source
+of truth and pre-change code physically cannot write a new identifier.
+
+```python
+import sqlite3
+with sqlite3.connect(db_path) as conn:
+    row = conn.execute(
+        "SELECT value FROM meta WHERE key='kdf_version'"
+    ).fetchone()
+kdf = row[0].decode("utf-8") if row and isinstance(row[0], bytes) else row
+assert kdf == "argon2id-v1"
+```
+
+To seed a legacy PBKDF2 DB without going through the CLI (i.e. construct
+the state pre-PR-13 code would have produced), see
+`tests/test_argon2_kdf.py::_seed_legacy_db` — `db.init_db` then
+`db.set_meta` with SALT + VERIFIER but **omit** the KDF row. The
+manager's `is_legacy_kdf()` returns True iff that row is absent.
 
 ## Recording
 
