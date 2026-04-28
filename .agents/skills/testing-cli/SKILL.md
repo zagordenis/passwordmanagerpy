@@ -13,7 +13,9 @@ web UI, no API, no screenshots needed.
   the first prompt is `Новий master password: ` instead, followed by
   `Підтвердіть master password:`.
 - Menu prompt: `Виберіть пункт: `
-- Login sub-prompt (items 1, 2, 4-style): **`Login: `** (English, not `Логін:`).
+- Login sub-prompt: **`Login: `** for items 1, 5, 12; **`Login для пошуку: `**
+  for item 2; **`Login для видалення: `** for item 4. (All English-prefixed,
+  not `Логін:`.)
 - Exit message: `До побачення.` (printed on `9`, on Ctrl+D at the menu, and on
   KeyboardInterrupt as `Перервано.`).
 - Auto-lock env: `PM_AUTO_LOCK_SECONDS=0` disables the timer; set it for any
@@ -65,8 +67,12 @@ child.expect_exact("Виберіть пункт:")
 8. Пошук   9. Вихід   10. Змінити master   11. Згенерувати пароль
 12. Скопіювати пароль у буфер обміну (з авто-очищенням)
 
-Items `9` and `11` (and the auto-lock prompt) are in `NO_AUTH_ACTIONS` —
-they neither trigger re-auth nor reset the inactivity timer. Item `12` is
+Items `9` and `11` (and the auto-lock prompt) neither trigger re-auth
+nor reset the inactivity timer. Note: only `11` is actually in
+`NO_AUTH_ACTIONS = {"11"}` (`password_manager/cli.py:45`); `9` is
+handled by an `if choice == "9":` early-return branch before the
+`NO_AUTH_ACTIONS` check is reached, so don't write assertions like
+`assert "9" in cli.NO_AUTH_ACTIONS` — they will fail. Item `12` is
 auth-gated: it reads the encrypted DB to decrypt the chosen account's
 password and DOES reset the inactivity timer like every other DB-backed
 action.
