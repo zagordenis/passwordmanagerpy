@@ -19,6 +19,45 @@ META_VERIFIER = "verifier"
 META_KDF = "kdf_version"
 
 
+@dataclass(frozen=True)
+class ImportResult:
+    """Outcome of :meth:`PasswordManager.import_from_json`.
+
+    Subclasses-of-int compatibility used to be the implicit contract — old
+    callers do ``int(result)`` or compare ``result == 2``. We preserve that
+    via :meth:`__int__` / :meth:`__eq__` so existing tests continue to work
+    while new callers can read the breakdown of skipped rows.
+    """
+
+    inserted: int
+    skipped_invalid: int = 0
+    skipped_duplicates: int = 0
+
+    def __int__(self) -> int:  # backward-compat: ``int(result) == count``
+        return self.inserted
+
+    def __index__(self) -> int:  # so ``range(result)`` etc. still work
+        return self.inserted
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, int):
+            return self.inserted == other
+        if isinstance(other, ImportResult):
+            return (
+                self.inserted == other.inserted
+                and self.skipped_invalid == other.skipped_invalid
+                and self.skipped_duplicates == other.skipped_duplicates
+            )
+        return NotImplemented
+
+    def __hash__(self) -> int:
+        return hash((self.inserted, self.skipped_invalid, self.skipped_duplicates))
+
+    @property
+    def total_skipped(self) -> int:
+        return self.skipped_invalid + self.skipped_duplicates
+
+
 @dataclass
 class UserRecord:
     """Plain-text view of a stored account (password decrypted)."""
@@ -313,10 +352,20 @@ class PasswordManager:
             pass
         return len(records)
 
-    def import_from_json(self, path: str, *, skip_duplicates: bool = True) -> int:
+    def import_from_json(
+        self, path: str, *, skip_duplicates: bool = True,
+    ) -> ImportResult:
         """Load accounts from a JSON file produced by `export_to_json`.
 
-        Returns the number of newly inserted rows. Duplicates are skipped by default.
+        Returns an :class:`ImportResult` with breakdowns of inserted /
+        skipped-invalid / skipped-duplicate rows. The CLI surfaces those
+        counts to the user so a partially-malformed import file isn't
+        silently truncated. Duplicates are skipped by default.
+
+        For backward compatibility ``ImportResult`` compares equal to its
+        ``inserted`` count and converts to ``int`` cleanly, so legacy callers
+        that just want the row count keep working.
+
         `path` may contain `~` or `$VAR`.
         """
         resolved = _resolve_path(path)
@@ -326,18 +375,24 @@ class PasswordManager:
             raise ValueError("import file must contain a JSON array of objects")
 
         inserted = 0
+        skipped_invalid = 0
+        skipped_duplicates = 0
         for entry in payload:
             if not isinstance(entry, dict):
                 # Tolerate junk entries instead of crashing mid-import.
+                skipped_invalid += 1
                 continue
             login = entry.get("login")
             email = entry.get("email")
             password = entry.get("password")
             if not isinstance(login, str) or not login:
+                skipped_invalid += 1
                 continue
             if not isinstance(password, str):
+                skipped_invalid += 1
                 continue
             if email is not None and not isinstance(email, str):
+                skipped_invalid += 1
                 continue
             try:
                 self.create_user(login, email or "", password)
@@ -345,7 +400,12 @@ class PasswordManager:
             except ValueError:
                 if not skip_duplicates:
                     raise
-        return inserted
+                skipped_duplicates += 1
+        return ImportResult(
+            inserted=inserted,
+            skipped_invalid=skipped_invalid,
+            skipped_duplicates=skipped_duplicates,
+        )
 
     # ---------- internals ----------
 
