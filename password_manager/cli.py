@@ -409,7 +409,7 @@ def _import_json(manager: PasswordManager) -> None:
     # Always show the summary so a partially-malformed file isn't silently
     # truncated (audit fix 1.3). Only mention skipped categories when > 0
     # to keep the happy path quiet.
-    parts = [f"Імпортовано {result.inserted} нових акаунтів"]
+    parts = [f"Імпортовано {result.inserted} нових акаунтів."]
     extras: list[str] = []
     if result.skipped_duplicates:
         extras.append(f"{result.skipped_duplicates} дублікатів")
@@ -417,8 +417,6 @@ def _import_json(manager: PasswordManager) -> None:
         extras.append(f"{result.skipped_invalid} невалідних записів")
     if extras:
         parts.append("Пропущено: " + ", ".join(extras) + ".")
-    else:
-        parts[0] += "."
     print(" ".join(parts))
 
 

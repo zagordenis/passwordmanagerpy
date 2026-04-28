@@ -372,6 +372,10 @@ class ImportCliReportingTests(unittest.TestCase):
         self.assertIn("Імпортовано 2", out)
         # Skipped count must appear so the user knows the file wasn't whole.
         self.assertTrue(re.search(r"1\s+невалідн", out), out)
+        # Cosmetic regression guard: the inserted-count clause must end in
+        # a period before the "Пропущено:" clause begins. (Earlier draft
+        # joined without a separator, producing "акаунтів Пропущено:".)
+        self.assertIn("акаунтів. Пропущено:", out)
 
     def test_cli_no_extras_line_when_zero_skipped(self) -> None:
         clean_path = os.path.join(self.tmp.name, "clean.json")
