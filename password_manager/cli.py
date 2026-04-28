@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import getpass
 import os
+import subprocess
 import sys
 import time
 from typing import Callable
 
+from . import clipboard as _clipboard
 from .generator import (
     DEFAULT_LENGTH,
     MAX_LENGTH,
@@ -31,6 +33,7 @@ MENU = """
 9)  Вихід
 10) Змінити master password
 11) Згенерувати пароль
+12) Скопіювати пароль у буфер обміну (з авто-очищенням)
 """
 
 DEFAULT_AUTO_LOCK_SECONDS = 300
@@ -212,6 +215,46 @@ def _generate_password(_manager: PasswordManager) -> None:
     _interactive_generate()
 
 
+def _copy_password_to_clipboard(manager: PasswordManager) -> None:
+    """Copy a stored account's password to the system clipboard.
+
+    Auto-clears the clipboard after ``PM_CLIPBOARD_CLEAR_SECONDS`` seconds
+    (default 15) so the password doesn't linger in plaintext.
+    """
+    session = _clipboard.get_session()
+    if session is None:
+        print(
+            "Буфер обміну недоступний: не знайдено жодного з "
+            "`xclip` / `xsel` / `wl-copy` / `pbcopy` / `clip` / `clip.exe`. "
+            "Встановіть один із них і спробуйте знову."
+        )
+        return
+    login = _prompt("Login: ")
+    if not login:
+        print("Login обов'язковий.")
+        return
+    record = manager.get_user(login)
+    if record is None:
+        print("Не знайдено.")
+        return
+    timeout = _clipboard.read_clear_seconds()
+    try:
+        session.copy_with_auto_clear(record.password, timeout)
+    except (OSError, subprocess.CalledProcessError) as exc:
+        print(f"Не вдалося скопіювати у буфер ({session.backend_name}): {exc}")
+        return
+    if timeout > 0:
+        print(
+            f"Пароль для {login!r} скопійовано у буфер обміну. "
+            f"Буде очищено через {timeout} с."
+        )
+    else:
+        print(
+            f"Пароль для {login!r} скопійовано у буфер обміну. "
+            "Авто-очищення вимкнено (PM_CLIPBOARD_CLEAR_SECONDS=0)."
+        )
+
+
 def _add_account(manager: PasswordManager) -> None:
     login = _prompt("Login: ")
     if not login:
@@ -365,6 +408,7 @@ ACTIONS = {
     "8": _search,
     "10": _change_master,
     "11": _generate_password,
+    "12": _copy_password_to_clipboard,
 }
 
 
