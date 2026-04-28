@@ -51,7 +51,11 @@ class ImportResult:
         return NotImplemented
 
     def __hash__(self) -> int:
-        return hash((self.inserted, self.skipped_invalid, self.skipped_duplicates))
+        # Must agree with ``__eq__``: since ``ImportResult(N) == N`` (int),
+        # ``hash(ImportResult(N))`` MUST equal ``hash(N)``. Hashing the full
+        # tuple would silently break hash-based lookups like
+        # ``{2: "x"}[ImportResult(inserted=2)]``.
+        return hash(self.inserted)
 
     @property
     def total_skipped(self) -> int:

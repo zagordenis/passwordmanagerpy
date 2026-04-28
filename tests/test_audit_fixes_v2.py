@@ -299,6 +299,25 @@ class ImportResultBackwardCompatTests(unittest.TestCase):
         r = ImportResult(inserted=2, skipped_invalid=1, skipped_duplicates=3)
         self.assertEqual(r.total_skipped, 4)
 
+    def test_import_result_hash_matches_int(self) -> None:
+        """Python data-model invariant: ``a == b`` implies ``hash(a) == hash(b)``.
+
+        ImportResult(N) compares equal to int(N), so its hash MUST match
+        ``hash(N)``. Otherwise hash-based lookups silently fail:
+        ``{2: "x"}[ImportResult(2)]`` would raise KeyError.
+        """
+        r = ImportResult(inserted=2, skipped_invalid=99, skipped_duplicates=99)
+        self.assertEqual(hash(r), hash(2))
+        # The skipped counters must NOT influence the hash, otherwise the
+        # invariant breaks for any non-zero skipped count.
+        self.assertEqual(
+            hash(ImportResult(inserted=5)),
+            hash(ImportResult(inserted=5, skipped_invalid=10)),
+        )
+        # End-to-end: dict lookup with int key must find ImportResult value.
+        d = {2: "x"}
+        self.assertEqual(d[ImportResult(2)], "x")
+
 
 class ImportFromJsonReportingTests(unittest.TestCase):
     def setUp(self) -> None:
