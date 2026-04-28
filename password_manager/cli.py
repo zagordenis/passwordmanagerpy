@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import getpass
+import logging
 import os
+import subprocess
 import sys
 import time
 from typing import Callable
 
+from . import clipboard as _clipboard
 from .generator import (
     DEFAULT_LENGTH,
     MAX_LENGTH,
@@ -31,6 +34,7 @@ MENU = """
 9)  Вихід
 10) Змінити master password
 11) Згенерувати пароль
+12) Скопіювати пароль у буфер обміну (з авто-очищенням)
 """
 
 DEFAULT_AUTO_LOCK_SECONDS = 300
@@ -39,6 +43,71 @@ AUTO_LOCK_ENV_VAR = "PM_AUTO_LOCK_SECONDS"
 # fresh master password after an idle period ("9" already exits early before
 # the auto-lock check runs).
 NO_AUTH_ACTIONS = {"11"}
+
+# Where unexpected-exception tracebacks are logged. Created lazily on first
+# use with mode 0o600 — we never want to print exception messages directly
+# on stderr, because a buggy ``raise RuntimeError(f"... {password}")`` would
+# leak credentials into the user's terminal scrollback (see audit issue 1.2).
+ERROR_LOG_ENV_VAR = "PM_ERROR_LOG_PATH"
+_logger = logging.getLogger("password_manager.cli")
+_logger_initialised = False
+
+
+def _default_error_log_path() -> str:
+    """Return the platform-appropriate default location for the error log."""
+    override = os.environ.get(ERROR_LOG_ENV_VAR)
+    if override:
+        return os.path.abspath(os.path.expanduser(os.path.expandvars(override)))
+    base = os.environ.get(
+        "XDG_STATE_HOME",
+        os.path.join(os.path.expanduser("~"), ".local", "state"),
+    )
+    return os.path.join(base, "passwordmanagerpy", "error.log")
+
+
+def _ensure_error_logger() -> str:
+    """Attach a FileHandler at ``_default_error_log_path`` (mode 0o600) once.
+
+    Returns the resolved log path so the CLI can show it to the user.
+    Idempotent across calls.
+    """
+    global _logger_initialised
+    path = _default_error_log_path()
+    if _logger_initialised:
+        return path
+    parent = os.path.dirname(path)
+    if parent:
+        try:
+            os.makedirs(parent, exist_ok=True)
+        except OSError:
+            # Fall back to a NullHandler so errors are still swallowed cleanly.
+            _logger.addHandler(logging.NullHandler())
+            _logger_initialised = True
+            return path
+    # Create the file with 0o600 BEFORE writing to it, mirroring the export
+    # helper, so a stale wide-open file from a previous run doesn't linger.
+    try:
+        flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND
+        fd = os.open(path, flags, 0o600)
+        os.close(fd)
+        try:
+            os.chmod(path, 0o600)
+        except OSError:  # pragma: no cover - non-POSIX or read-only fs
+            pass
+        handler: logging.Handler = logging.FileHandler(
+            path, mode="a", encoding="utf-8",
+        )
+    except OSError:
+        # Filesystem unwritable — still register a handler so calls don't crash.
+        handler = logging.NullHandler()
+    handler.setFormatter(
+        logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+    )
+    _logger.addHandler(handler)
+    _logger.setLevel(logging.ERROR)
+    _logger.propagate = False
+    _logger_initialised = True
+    return path
 
 
 def _read_auto_lock_seconds() -> int:
@@ -212,6 +281,46 @@ def _generate_password(_manager: PasswordManager) -> None:
     _interactive_generate()
 
 
+def _copy_password_to_clipboard(manager: PasswordManager) -> None:
+    """Copy a stored account's password to the system clipboard.
+
+    Auto-clears the clipboard after ``PM_CLIPBOARD_CLEAR_SECONDS`` seconds
+    (default 15) so the password doesn't linger in plaintext.
+    """
+    session = _clipboard.get_session()
+    if session is None:
+        print(
+            "Буфер обміну недоступний: не знайдено жодного з "
+            "`xclip` / `xsel` / `wl-copy` / `pbcopy` / `clip` / `clip.exe`. "
+            "Встановіть один із них і спробуйте знову."
+        )
+        return
+    login = _prompt("Login: ")
+    if not login:
+        print("Login обов'язковий.")
+        return
+    record = manager.get_user(login)
+    if record is None:
+        print("Не знайдено.")
+        return
+    timeout = _clipboard.read_clear_seconds()
+    try:
+        session.copy_with_auto_clear(record.password, timeout)
+    except (OSError, subprocess.CalledProcessError) as exc:
+        print(f"Не вдалося скопіювати у буфер ({session.backend_name}): {exc}")
+        return
+    if timeout > 0:
+        print(
+            f"Пароль для {login!r} скопійовано у буфер обміну. "
+            f"Буде очищено через {timeout} с."
+        )
+    else:
+        print(
+            f"Пароль для {login!r} скопійовано у буфер обміну. "
+            "Авто-очищення вимкнено (PM_CLIPBOARD_CLEAR_SECONDS=0)."
+        )
+
+
 def _add_account(manager: PasswordManager) -> None:
     login = _prompt("Login: ")
     if not login:
@@ -293,11 +402,22 @@ def _import_json(manager: PasswordManager) -> None:
         print("Шлях обов'язковий.")
         return
     try:
-        inserted = manager.import_from_json(path)
+        result = manager.import_from_json(path)
     except (OSError, ValueError) as exc:
         print(f"Помилка імпорту: {exc}")
         return
-    print(f"Імпортовано {inserted} нових акаунтів (дублікати пропущено).")
+    # Always show the summary so a partially-malformed file isn't silently
+    # truncated (audit fix 1.3). Only mention skipped categories when > 0
+    # to keep the happy path quiet.
+    parts = [f"Імпортовано {result.inserted} нових акаунтів."]
+    extras: list[str] = []
+    if result.skipped_duplicates:
+        extras.append(f"{result.skipped_duplicates} дублікатів")
+    if result.skipped_invalid:
+        extras.append(f"{result.skipped_invalid} невалідних записів")
+    if extras:
+        parts.append("Пропущено: " + ", ".join(extras) + ".")
+    print(" ".join(parts))
 
 
 def _search(manager: PasswordManager) -> None:
@@ -365,6 +485,7 @@ ACTIONS = {
     "8": _search,
     "10": _change_master,
     "11": _generate_password,
+    "12": _copy_password_to_clipboard,
 }
 
 
@@ -421,8 +542,17 @@ def run(
             except _UserAbort:
                 # Ctrl+D inside an action — abandon it and go back to menu.
                 print()
-            except Exception as exc:  # noqa: BLE001 - keep CLI running
-                print(f"Несподівана помилка: {exc}", file=sys.stderr)
+            except Exception:  # noqa: BLE001 - keep CLI running
+                # Log the full traceback to a private file (0o600); print only
+                # a generic line on stderr so a sensitive substring inside the
+                # exception message can never leak into the user's terminal
+                # scrollback (audit fix 1.2).
+                log_path = _ensure_error_logger()
+                _logger.exception("unexpected error in action %r", choice)
+                print(
+                    f"Несподівана помилка. Деталі у журналі: {log_path}",
+                    file=sys.stderr,
+                )
             if choice not in NO_AUTH_ACTIONS:
                 last_activity = clock()
     except _UserAbort:
